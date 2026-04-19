@@ -188,7 +188,7 @@ let audioChunks = [];
 let audioBlob;
 let recognition;
 let isDictating = false;
-let finalTranscript = "";
+let dictationBaseText = "";
 
 function getSpeechRecognition() {
   return window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -284,13 +284,13 @@ function toggleDictation() {
     return;
   }
 
-  finalTranscript = keepPreviousText ? inputField.value.trim() : "";
+  dictationBaseText = keepPreviousText ? inputField.value.trim() : "";
   if (!keepPreviousText) {
     inputField.value = "";
   }
 
-  if (finalTranscript) {
-    finalTranscript += " ";
+  if (dictationBaseText) {
+    dictationBaseText += " ";
   }
 
   recognition = new SpeechRecognition();
@@ -305,18 +305,19 @@ function toggleDictation() {
   };
 
   recognition.onresult = (event) => {
+    let recognizedFinalText = "";
     let interimTranscript = "";
 
-    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+    for (let i = 0; i < event.results.length; i += 1) {
       const transcript = event.results[i][0].transcript;
       if (event.results[i].isFinal) {
-        finalTranscript += transcript.trim() + " ";
+        recognizedFinalText += transcript.trim() + " ";
       } else {
         interimTranscript += transcript;
       }
     }
 
-    inputField.value = (finalTranscript + interimTranscript).trim();
+    inputField.value = (dictationBaseText + recognizedFinalText + interimTranscript).trim();
   };
 
   recognition.onerror = (event) => {
@@ -326,7 +327,7 @@ function toggleDictation() {
   recognition.onend = () => {
     isDictating = false;
     updateDictationButton();
-    finalTranscript = inputField.value.trim();
+    dictationBaseText = inputField.value.trim();
 
     if (!document.getElementById("status").innerText.includes("blokkolta")) {
       setStatus("Diktálás leállítva.", false);
