@@ -56,6 +56,35 @@
     margin-top: 0;
   }
 
+  .toggle-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 16px 0 12px;
+  }
+
+  .toggle-group input {
+    display: none;
+  }
+
+  .toggle-group label {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 2px solid #cfd8e3;
+    background: #fff;
+    text-align: center;
+    cursor: pointer;
+    font-weight: 700;
+    transition: 0.15s;
+  }
+
+  .toggle-group input:checked + label {
+    background: #1f7a3f;
+    border-color: #1f7a3f;
+    color: #fff;
+  }
+
   .controls {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
@@ -152,8 +181,19 @@
 
 <h2>🎙️ Pronunciation Trainer</h2>
 
-<label for="input">Szöveg (magyar vagy angol):</label>
+<label for="input">Szöveg:</label>
 <textarea id="input" placeholder="Írj ide vagy diktáld..."></textarea>
+
+<div class="toggle-group">
+  <div>
+    <input type="radio" id="modeHuToEn" name="translationMode" value="hu-en" checked>
+    <label for="modeHuToEn">Magyar -> angol</label>
+  </div>
+  <div>
+    <input type="radio" id="modeEnToHu" name="translationMode" value="en-hu">
+    <label for="modeEnToHu">Angol -> magyar</label>
+  </div>
+</div>
 
 <div class="slider-container">
   <label for="speed">Kiejtési sebesség:</label>
@@ -203,6 +243,17 @@ function isAndroid() {
 
 function isSecurePage() {
   return window.isSecureContext || location.protocol === "https:" || location.hostname === "localhost";
+}
+
+function getTranslationMode() {
+  return document.querySelector('input[name="translationMode"]:checked').value;
+}
+
+function getTranslationConfig() {
+  const mode = getTranslationMode();
+  return mode === "en-hu"
+    ? { source: "en", target: "hu", speakLang: "hu-HU", ipaEnabled: false }
+    : { source: "hu", target: "en", speakLang: "en-US", ipaEnabled: true };
 }
 
 function setStatus(message, isError = true) {
@@ -309,6 +360,7 @@ function toggleDictation() {
   const inputField = document.getElementById("input");
   const keepPreviousText = document.getElementById("keepPreviousText").checked;
   const SpeechRecognition = getSpeechRecognition();
+  const { source } = getTranslationConfig();
 
   if (!SpeechRecognition) {
     setStatus("A böngésző nem támogatja a hangalapú diktálást.");
@@ -336,7 +388,7 @@ function toggleDictation() {
   }
 
   recognition = new SpeechRecognition();
-  recognition.lang = "hu-HU";
+  recognition.lang = source === "en" ? "en-US" : "hu-HU";
   recognition.continuous = !isAndroid();
   recognition.interimResults = false;
 
@@ -393,8 +445,10 @@ function toggleDictation() {
 }
 
 async function translateText(text) {
+  const { source, target } = getTranslationConfig();
+
   try {
-    const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(text)}`);
+    const res = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=${source}&tl=${target}&dt=t&q=${encodeURIComponent(text)}`);
     const data = await res.json();
     return Array.isArray(data[0])
       ? data[0].map((part) => part[0]).join("").trim()
@@ -421,6 +475,8 @@ async function fetchIPA(word) {
 
 async function process() {
   const inputVal = document.getElementById("input").value.trim();
+  const { ipaEnabled, speakLang } = getTranslationConfig();
+
   if (!inputVal) {
     return;
   }
@@ -429,7 +485,6 @@ async function process() {
 
   const translatedText = await translateText(inputVal);
   const words = translatedText.split(/\s+/).filter(Boolean);
-
   const out = document.getElementById("output");
   out.innerHTML = "";
 
@@ -437,20 +492,24 @@ async function process() {
     const span = document.createElement("span");
     span.className = "word";
     span.innerText = word;
-    span.onclick = () => speak(word.replace(/[.,!?;:]/g, ""));
+    span.onclick = () => speak(word.replace(/[.,!?;:]/g, ""), speakLang);
     out.appendChild(span);
   });
 
-  const results = await Promise.all(
-    words.map(async (word) => `${word}: ${await fetchIPA(word)}`)
-  );
+  if (ipaEnabled) {
+    const results = await Promise.all(
+      words.map(async (word) => `${word}: ${await fetchIPA(word)}`)
+    );
+    document.getElementById("ipa").innerText = results.join("\n") || "Nincs találat.";
+  } else {
+    document.getElementById("ipa").innerText = "IPA csak magyar -> angol fordításnál érhető el.";
+  }
 
-  document.getElementById("ipa").innerText = results.join("\n") || "Nincs találat.";
   clearStatus();
-  speak(translatedText);
+  speak(translatedText, speakLang);
 }
 
-function speak(text) {
+function speak(text, lang = "en-US") {
   speechSynthesis.cancel();
   const rate = Number(document.getElementById("speed").value);
   const sentences = text
@@ -464,7 +523,7 @@ function speak(text) {
 
   sentences.forEach((sentence) => {
     const utterance = new SpeechSynthesisUtterance(sentence);
-    utterance.lang = "en-US";
+    utterance.lang = lang;
     utterance.rate = rate;
     speechSynthesis.speak(utterance);
   });
