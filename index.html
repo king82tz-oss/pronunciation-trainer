@@ -248,22 +248,11 @@ function getMicrophoneErrorMessage(errorCode, isDictationFeature) {
   return `Hiba: ${errorCode}`;
 }
 
-async function ensureMicrophoneAccess() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("unsupported");
-  }
-
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  stream.getTracks().forEach((track) => track.stop());
-}
-
-async function startDictation(recognitionInstance) {
+function startDictation(recognitionInstance) {
   try {
     if (location.protocol === "file:") {
       setTip("Az oldal most file:// módban fut. Androidon ehhez a mikrofonos funkciók gyakran tiltva vannak. Használj https:// megnyitást.");
     }
-
-    await ensureMicrophoneAccess();
     recognitionInstance.start();
   } catch (error) {
     isDictating = false;
