@@ -166,7 +166,7 @@
 </label>
 
 <div id="status"></div>
-<div id="tips">Tipp: Androidon a mikrofonos funkciók akkor a legstabilabbak, ha az oldalt Chrome-ban, https:// címen nyitod meg.</div>
+<div id="tips">Tipp: Androidon a diktálás böngészőfüggő. Ha Chrome alatt blokkolt, Brave-ban működhet, de ott is kell külön mobilos stabilizálás.</div>
 
 <button id="btnDictate" onclick="toggleDictation()">🎤 Szöveg írása hanggal</button>
 
@@ -188,10 +188,17 @@ let audioChunks = [];
 let audioBlob;
 let recognition;
 let isDictating = false;
+let shouldKeepDictating = false;
 let dictationBaseText = "";
+let dictatedFinalText = "";
+let lastRecognitionError = "";
 
 function getSpeechRecognition() {
   return window.SpeechRecognition || window.webkitSpeechRecognition;
+}
+
+function isAndroid() {
+  return /Android/i.test(navigator.userAgent);
 }
 
 function isSecurePage() {
@@ -205,8 +212,7 @@ function setStatus(message, isError = true) {
 }
 
 function clearStatus() {
-  const status = document.getElementById("status");
-  status.innerText = "";
+  document.getElementById("status").innerText = "";
 }
 
 function setTip(message) {
@@ -218,10 +224,47 @@ function updateDictationButton() {
   button.innerText = isDictating ? "⏹️ Diktálás leállítása" : "🎤 Szöveg írása hanggal";
 }
 
+function normalizeTranscript(text) {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function appendUniqueTranscript(existing, incoming) {
+  const current = normalizeTranscript(existing);
+  const next = normalizeTranscript(incoming);
+
+  if (!next) {
+    return current;
+  }
+
+  if (!current) {
+    return next;
+  }
+
+  const currentLower = current.toLowerCase();
+  const nextLower = next.toLowerCase();
+
+  if (currentLower === nextLower || currentLower.endsWith(nextLower)) {
+    return current;
+  }
+
+  if (nextLower.startsWith(currentLower)) {
+    return next;
+  }
+
+  const maxOverlap = Math.min(current.length, next.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (currentLower.slice(-overlap) === nextLower.slice(0, overlap)) {
+      return normalizeTranscript(`${current} ${next.slice(overlap)}`);
+    }
+  }
+
+  return normalizeTranscript(`${current} ${next}`);
+}
+
 function getMicrophoneErrorMessage(errorCode, isDictationFeature) {
   if (errorCode === "not-allowed") {
     if (location.protocol === "file:") {
-      return "A mikrofon Androidon gyakran nem használható file:// megnyitásból. Nyisd meg az oldalt Chrome-ban egy https:// címen.";
+      return "A mikrofon Androidon gyakran nem használható file:// megnyitásból. Nyisd meg az oldalt egy https:// címen.";
     }
 
     if (!isSecurePage()) {
@@ -229,8 +272,8 @@ function getMicrophoneErrorMessage(errorCode, isDictationFeature) {
     }
 
     return isDictationFeature
-      ? "A diktálást a böngésző blokkolta. Androidon ezt érdemes Chrome-ban, https:// címen használni."
-      : "A mikrofonhasználatot a böngésző blokkolta. Ellenőrizd a webhelyengedélyeket és a Chrome beállításait.";
+      ? "A diktálást a böngésző blokkolta. Ez Androidon böngésző- és készülékfüggő hiba is lehet."
+      : "A mikrofonhasználatot a böngésző blokkolta. Ellenőrizd a webhelyengedélyeket és a böngésző beállításait.";
   }
 
   if (errorCode === "service-not-allowed") {
@@ -250,18 +293,12 @@ function getMicrophoneErrorMessage(errorCode, isDictationFeature) {
 
 function startDictation(recognitionInstance) {
   try {
-    if (location.protocol === "file:") {
-      setTip("Az oldal most file:// módban fut. Androidon ehhez a mikrofonos funkciók gyakran tiltva vannak. Használj https:// megnyitást.");
-    }
+    lastRecognitionError = "";
     recognitionInstance.start();
   } catch (error) {
     isDictating = false;
+    shouldKeepDictating = false;
     updateDictationButton();
-
-    if (error?.message === "unsupported") {
-      setStatus("Ez a böngésző nem támogatja a mikrofonengedély kérését.");
-      return;
-    }
 
     const code = error?.name === "NotAllowedError" ? "not-allowed" : "audio-capture";
     setStatus(getMicrophoneErrorMessage(code, true));
@@ -275,16 +312,21 @@ function toggleDictation() {
 
   if (!SpeechRecognition) {
     setStatus("A böngésző nem támogatja a hangalapú diktálást.");
-    setTip("Androidon a hangfelismerés legjobb eséllyel Chrome-ban működik.");
+    setTip("Ha a diktálás fontos, Androidon másik böngészővel vagy másik készülékkel is érdemes kipróbálni.");
     return;
   }
 
   if (isDictating && recognition) {
+    shouldKeepDictating = false;
     recognition.stop();
     return;
   }
 
   dictationBaseText = keepPreviousText ? inputField.value.trim() : "";
+  dictatedFinalText = "";
+  shouldKeepDictating = true;
+  lastRecognitionError = "";
+
   if (!keepPreviousText) {
     inputField.value = "";
   }
@@ -295,7 +337,7 @@ function toggleDictation() {
 
   recognition = new SpeechRecognition();
   recognition.lang = "hu-HU";
-  recognition.continuous = true;
+  recognition.continuous = !isAndroid();
   recognition.interimResults = true;
 
   recognition.onstart = () => {
@@ -305,30 +347,47 @@ function toggleDictation() {
   };
 
   recognition.onresult = (event) => {
-    let recognizedFinalText = "";
     let interimTranscript = "";
 
-    for (let i = 0; i < event.results.length; i += 1) {
+    for (let i = event.resultIndex; i < event.results.length; i += 1) {
       const transcript = event.results[i][0].transcript;
+
       if (event.results[i].isFinal) {
-        recognizedFinalText += transcript.trim() + " ";
+        dictatedFinalText = appendUniqueTranscript(dictatedFinalText, transcript);
       } else {
-        interimTranscript += transcript;
+        interimTranscript += `${transcript} `;
       }
     }
 
-    inputField.value = (dictationBaseText + recognizedFinalText + interimTranscript).trim();
+    inputField.value = normalizeTranscript(`${dictationBaseText}${dictatedFinalText} ${interimTranscript}`);
   };
 
   recognition.onerror = (event) => {
+    lastRecognitionError = event.error;
+
+    if (event.error === "aborted") {
+      return;
+    }
+
     setStatus(getMicrophoneErrorMessage(event.error, true));
   };
 
   recognition.onend = () => {
     isDictating = false;
     updateDictationButton();
-    dictationBaseText = inputField.value.trim();
+    dictationBaseText = normalizeTranscript(inputField.value);
 
+    if (shouldKeepDictating && !["not-allowed", "service-not-allowed", "audio-capture"].includes(lastRecognitionError)) {
+      setStatus("Figyelek... folytathatod a diktálást.", false);
+      setTimeout(() => {
+        if (shouldKeepDictating) {
+          startDictation(recognition);
+        }
+      }, 250);
+      return;
+    }
+
+    shouldKeepDictating = false;
     if (!document.getElementById("status").innerText.includes("blokkolta")) {
       setStatus("Diktálás leállítva.", false);
     }
@@ -426,10 +485,6 @@ async function toggleRecord() {
   }
 
   try {
-    if (location.protocol === "file:") {
-      setTip("Az oldal most file:// módban fut. Androidon a hangfelvétel ilyenkor blokkolva lehet. Használj https:// megnyitást.");
-    }
-
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaRecorder = new MediaRecorder(stream);
     audioChunks = [];
